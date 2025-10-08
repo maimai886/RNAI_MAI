@@ -6,6 +6,7 @@ ST_ATTACK=3
 ST_SKILL=4
 ST_ATTACK_PRE=5
 ST_SKILL_GND=6
+
 --狀態廣域變數
 AITick=-1
 InitStatus=0
@@ -30,7 +31,29 @@ MyMotion=0
 MyMotion_t=0
 EnableNormalAttack=true
 
-function MoveToDest(id,x,y) -- 移動到指定位置，完成回傳true
+ -- 載入好友系統模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/Friends.lua") end)
+
+ -- 載入守衛模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/Guard.lua") end)
+
+ -- 載入跳舞模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/DanceAttack.lua") end)
+
+-- 區間檢查：range 為 {min, max}；若未提供則一律通過
+function isInRange(value, range)
+	if range==nil then return true end
+	local minVal = range[1] or 0
+	local maxVal = range[2] or 100
+	return value >= minVal and value <= maxVal
+end
+
+-- 取得需求敵數，未填寫時以 0 視為不限制
+function needOrZero(v)
+	return v or 0
+end
+
+ function MoveToDest(id,x,y) -- 移動到指定位置，完成回傳true
 	local mx,my=GetV(V_POSITION,id)
 	local vx=x-mx
 	local vy=y-my
@@ -81,7 +104,7 @@ end
 
 function getSepcFilename(myid)
     local t = GetV(V_HOMUNTYPE, myid)
-    local d = "./AI/USER_AI/RNAI/custom/"
+    local d = "./AI/USER_AI/RNAI_MAI/custom/"
     if (t ~= nil) then
         -- 生命體
         if t < 48 then
@@ -150,6 +173,10 @@ function AI(myid)
 	if InitStatus==0 then
 		AtkDis=GetV(V_ATTACKRANGE,myid)
 		InitStatus=1
+		local mytype=GetV(V_HOMUNTYPE,myid)
+		if(tb_property_exist(Skill,"id",0)==false)then
+			EnableNormalAttack=false
+		end
 		local sepcFilename = getSepcFilename(myid)
 		-- log_var("sepcFilename = ",sepcFilename)
 		if(type(sepcFilename)=="string" and file_exist(sepcFilename))then
@@ -162,15 +189,15 @@ function AI(myid)
 				break
 			end
 		end
+		
+		-- 載入持久化好友數據
+		LoadFriendsData()
+		
 		return
 	elseif InitStatus==1 then
 		InitStatus=2
-		EnableNormalAttack=false
 		for i,sk in ipairs(Skill) do
 			local castType, effectArea
-			if sk.id==0 then
-				EnableNormalAttack=true
-			end
 			if SkillData[sk.id]~=nil then
 				local skData = SkillData[sk.id]
 				castType = SkillData[sk.id][1]
@@ -213,12 +240,17 @@ function AI(myid)
 	RefreshData(myid,oid)
 	-- 玩家指令
 	if msg[1]==MOVE_CMD then
+		-- 移動指令
+		-- 效果：生命體/傭兵會朝座標 (msg[2], msg[3]) 移動；
+		--       抵達後切換為 HOLD（原地待命，不主動尋敵，只在範圍內反擊）。
 		MyState=ST_MOVE_CMD
 		DestX=msg[2]
 		DestY=msg[3]
 	elseif msg[1]==FOLLOW_CMD then
-		--TraceAI("num of Mobs:"..#Mobs)
-		--TraceAI("bestTarget:"..bestTarget)
+		-- 跟隨指令
+		-- 效果（單次）：切換為跟隨狀態，維持與主人的距離（`FollowDis`）。
+		-- 效果（500ms 內連按兩次）：在被動/主動模式間切換（輪替 `SearchMode` → `SearchSetting`）。
+		-- 提示：Alt+T 連按兩次會觸發此切換；單按一次僅進入跟隨，不切模式。
 		local t=GetTick()
 		if(t-FollowCmdTime<500)then
 			Aggr=Aggr%#SearchMode+1
@@ -227,20 +259,27 @@ function AI(myid)
 		FollowCmdTime=t
 		MyState=ST_FOLLOW
 	elseif msg[1]==ATTACK_OBJECT_CMD then
+		-- 攻擊指令（對象）
+		-- 效果：強制指定攻擊目標（即使在被動模式也會進入攻擊流程）。
+		--       若目標消失或過遠，後續會自動回到跟隨。
 		MyState=ST_ATTACK
 		Target=msg[2]
 		if(isHomunculus) then
 			TraceAI("id:"..msg[2]..",type"..GetV(V_HOMUNTYPE,msg[2]))
 		end
 	elseif msg[1]==SKILL_OBJECT_CMD then
-		--使用鎖定目標的技能
+		-- 技能指令（目標型）
+		-- 效果：設定對單一對象施放的技能與等級；若距離不足會自動接近，
+		--       進入 `ST_SKILL` 狀態，施放後若對象是怪物會轉入攻擊，否則回到跟隨。
 		MyState=ST_SKILL
 		ManualSkill.lv = msg[2]
 		ManualSkill.id = msg[3]
 		ManualSkill.target = msg[4]
 		ManualSkill.range = GetV(V_SKILLATTACKRANGE_LEVEL, myid, ManualSkill.id, ManualSkill.lv)
 	elseif msg[1]==SKILL_AREA_CMD then
-		--使用地面技能
+		-- 技能指令（地面型）
+		-- 效果：設定對地面座標施放的技能與等級；若距離不足會自動接近，
+		--       在施放完成後回到跟隨。
 		MyState = ST_SKILL_GND
 		ManualSkill.lv = msg[2]
 		ManualSkill.id = msg[3]
@@ -248,41 +287,27 @@ function AI(myid)
 		ManualSkill.y = msg[5]
 		ManualSkill.range = GetV(V_SKILLATTACKRANGE_LEVEL, myid, ManualSkill.id, ManualSkill.lv)
 	end
-	if(msg[1]==NONE_CMD)then --預約指令
+	if(msg[1]==NONE_CMD)then -- 預約指令
+		-- 效果：處理保留（預約）指令。搭配 Shift/Alt 右鍵可把移動/攻擊加入預約佇列。
 		if(rmsg[1]==MOVE_CMD)then
 			if(MyState==ST_MOVE_CMD or MyState==ST_HOLD)then
-				--範圍加入好友
+				-- 以移動矩形範圍加入好友（改用模組）
 				local x1,y1=math.min(DestX,rmsg[2]),math.min(DestY,rmsg[3])
 				local x2,y2=math.max(DestX,rmsg[2]),math.max(DestY,rmsg[3])
-				local tx,ty
-				for i,v in ipairs(others)do
-					tx,ty=GetV(V_POSITION,v)
-					if(x1<=tx and tx<=x2 and y1<=ty and ty<=y2)then
-						friends[#friends+1]=v
-					end
-				end
+				Friends_AddInRect(x1,y1,x2,y2)
 				MyState=ST_FOLLOW
 			else
-				--個別加入好友
+				-- 以單一座標加入好友（保持行為不變）
 				rmsg[2]=XYInMobs(rmsg[2],rmsg[3])
 				rmsg[1]=ATTACK_OBJECT_CMD
 			end
 		end
 		if(rmsg[1]==ATTACK_OBJECT_CMD)then
-			--TraceAI("")
+			-- 攻擊預約 → 好友清單維護（改用模組）
 			if(rmsg[2]==myid)then
-				friends={} --清除firend
+				Friends_Clear()
 			else
-				local f_exist=false
-				for i,v in ipairs(friends)do
-					if(v==rmsg[2])then
-						f_exist=true
-						break
-					end
-				end
-				if(f_exist==false)then
-					friends[#friends+1]=rmsg[2] --添加firend
-				end
+				Friends_Add(rmsg[2])
 			end
 		end
 	end
@@ -299,11 +324,30 @@ function AI(myid)
 		if(bestTarget>0 and Mobs[bestTarget][5]>=0)then
 			MyState=ST_ATTACK_PRE
 		end
-		if(MyState==ST_FOLLOW and getObjRectDis(oid,myid)>FollowDis)then
-			local x1,y1=GetV(V_POSITION,oid)
-			local x2,y2=GetV(V_POSITION,myid)
-			local dx,dy=getRectPos(x1,y1,x2,y2,FollowDis)
-			Move(myid,dx,dy)
+		
+		-- 守衛模式或一般跟隨模式
+		if(MyState==ST_FOLLOW)then
+			if(GuardMode==1)then
+				-- 守衛模式：生命體保持在玩家前方
+				local guardX, guardY = getGuardPosition(myid, oid)
+				if(guardX ~= nil and guardY ~= nil)then
+					MoveToDest(myid, guardX, guardY)
+				end
+			elseif(GuardMode==2)then
+				-- 轉圈模式：生命體在玩家周圍轉圈
+				local circleX, circleY = getCirclePosition(myid, oid)
+				if(circleX ~= nil and circleY ~= nil)then
+					MoveToDest(myid, circleX, circleY)
+				end
+			else
+				-- 一般跟隨模式：保持跟隨距離
+				if(getObjRectDis(oid,myid)>FollowDis)then
+					local x1,y1=GetV(V_POSITION,oid)
+					local x2,y2=GetV(V_POSITION,myid)
+					local dx,dy=getRectPos(x1,y1,x2,y2,FollowDis)
+					Move(myid,dx,dy)
+				end
+			end
 		end
 	--追擊目標
 	elseif (MyState==ST_ATTACK_PRE) then
@@ -319,6 +363,7 @@ function AI(myid)
 				local dis=getObjRectDis(myid,Target)
 				if(dis<=AtkDis)then
 					Attack(myid,Target)
+					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
 				end
 				if(Target>0 and getObjRectDis(oid,Target)<15)then
 					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
@@ -347,6 +392,7 @@ function AI(myid)
 				local dis=getObjRectDis(myid,Target)
 				if(dis<=AtkDis)then
 					Attack(myid,Target)
+					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
 				end
 				if(Target>0 and getObjRectDis(oid,Target)<15)then
 					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
@@ -392,78 +438,108 @@ function AI(myid)
 		end
 	end
 end
+
+-- 從技能列表找出適當的技能 回傳idx及追擊格數
 function GetAutoSkill(myid) --從技能列表找出適當的技能 回傳idx及追擊格數
-	local min_r=100
-	local r=getObjRectDis(myid,Target)
-	local t=GetTick()
-	local sp=GetV(V_SP,myid)/GetV(V_MAXSP,myid)*100
-	local skill_id=0
-	for i,sk in ipairs(Skill) do
-		if(sk.when~=2 and t-sk.stemp>=sk.delay and sk.sp[1]<=sp and sp<=sk.sp[2] and nOwnerEnemy>=sk.nOwnerEnemy and nMyEnemy>=sk.nMyEnemy and nRangeEnemy>=sk.nRangeEnemy)then
-			if(r<=sk.range)then
-				if(skill_id==0)then
-					skill_id=i
+	local min_r=100 -- 最小追擊距離，初始值設為100
+	local r=getObjRectDis(myid,Target) -- 計算與目標的距離
+	local t=GetTick() -- 取得當前時間戳記
+	local sp=GetV(V_SP,myid)/GetV(V_MAXSP,myid)*100 -- 計算生命體SP百分比
+	local hp=GetV(V_HP,myid)/GetV(V_MAXHP,myid)*100 -- 計算生命體HP百分比
+	local ownerId=GetV(V_OWNER,myid) -- 取得主人ID
+	local ownerSp=GetV(V_SP,ownerId)/GetV(V_MAXSP,ownerId)*100 -- 計算主人SP百分比
+	local ownerHp=GetV(V_HP,ownerId)/GetV(V_MAXHP,ownerId)*100 -- 計算主人HP百分比
+	local skill_id=0 -- 選中的技能ID，0表示無可用技能
+	for i,sk in ipairs(Skill) do -- 遍歷所有技能
+		-- 條件預先判斷（有填才檢查）
+		local okSp = isInRange(sp, sk.sp) -- SP 範圍（可選）
+		local okHp = isInRange(hp, sk.hp) -- HP 範圍（可選）
+		local okOwnerSp = isInRange(ownerSp, sk.ownerSp) -- 主人 SP 範圍（可選）
+		local okOwnerHp = isInRange(ownerHp, sk.ownerHp) -- 主人 HP 範圍（可選）
+		local needOwnerEnemy = needOrZero(sk.nOwnerEnemy) -- 主人敵數（未填=0）
+		local needMyEnemy = needOrZero(sk.nMyEnemy) -- 自身敵數（未填=0）
+		local needRangeEnemy = needOrZero(sk.nRangeEnemy) -- 範圍敵數（未填=0）
+		-- 綜合條件：非排除、冷卻時間到、各種可選區間通過、敵數需求符合
+		if(sk.when~=2 and t-sk.stemp>=sk.delay and okSp and okHp and okOwnerSp and okOwnerHp and nOwnerEnemy>=needOwnerEnemy and nMyEnemy>=needMyEnemy and nRangeEnemy>=needRangeEnemy)then
+			if(r<=sk.range)then -- 如果在技能範圍內
+				if(skill_id==0)then -- 如果還沒選中技能
+					skill_id=i -- 選中此技能
 				end
-			else
-				if(sk.chase==1 and min_r>sk.range)then
-					min_r=sk.range
+			else -- 如果不在技能範圍內
+				if(sk.chase==1 and min_r>sk.range)then -- 如果此技能可追擊且距離更近
+					min_r=sk.range -- 更新最小追擊距離
 				end
 			end
 		end
 	end
-	return skill_id,min_r
+	return skill_id,min_r -- 回傳選中的技能ID和最小追擊距離
 end
 
+-- 從技能列表使用技能，回傳追擊格數
 function autoUseSkill(myId, ownerId, mobId, excludeWhen) --從技能列表使用技能，回傳追擊格數
-	local minRadius = 100
-	local r = {
-		[0] = getObjRectDis(myId, mobId), --sk.target=0 (魔物)
-		[1] = getObjRectDis(myId, ownerId), --sk.target=1 (主人)
-		[2] = 0 --sk.target=2 (生命體/傭兵)
+	local minRadius = 100 -- 最小追擊半徑，初始值設為100
+	local r = { -- 距離陣列，儲存與不同目標的距離
+		[0] = getObjRectDis(myId, mobId), --sk.target=0 (魔物) 與魔物的距離
+		[1] = getObjRectDis(myId, ownerId), --sk.target=1 (主人) 與主人的距離
+		[2] = 0 --sk.target=2 (生命體/傭兵) 對自身使用技能距離為0
 	}
-	local targets = {
-		[0] = mobId, --sk.target=0 (魔物)
-		[1] = ownerId, --sk.target=1 (主人)
-		[2] = myId --sk.target=2 (生命體/傭兵)
+	local targets = { -- 目標陣列，儲存不同目標的ID
+		[0] = mobId, --sk.target=0 (魔物) 魔物ID
+		[1] = ownerId, --sk.target=1 (主人) 主人ID
+		[2] = myId --sk.target=2 (生命體/傭兵) 自身ID
 	}
-	local t = GetTick()
-	local sp = GetV(V_SP, myId) / GetV(V_MAXSP, myId) * 100
-	local usedFlag = false
-	for i, sk in ipairs(Skill) do
+	local t = GetTick() -- 取得當前時間戳記
+	local sp = GetV(V_SP, myId) / GetV(V_MAXSP, myId) * 100 -- 計算生命體SP百分比
+	local hp = GetV(V_HP, myId) / GetV(V_MAXHP, myId) * 100 -- 計算生命體HP百分比
+	local ownerSp=GetV(V_SP,ownerId)/GetV(V_MAXSP,ownerId)*100 -- 計算主人SP百分比
+	local ownerHp=GetV(V_HP,ownerId)/GetV(V_MAXHP,ownerId)*100 -- 計算主人HP百分比
+	local usedFlag = false -- 技能使用標記，確保一次只使用一個技能
+	for i, sk in ipairs(Skill) do -- 遍歷所有技能
+		-- 條件預先判斷（有填才檢查）
+		local okSp = isInRange(sp, sk.sp) -- SP 範圍（可選）
+		local okHp = isInRange(hp, sk.hp) -- HP 範圍（可選）
+		local okOwnerSp = isInRange(ownerSp, sk.ownerSp) -- 主人 SP 範圍（可選）
+		local okOwnerHp = isInRange(ownerHp, sk.ownerHp) -- 主人 HP 範圍（可選）
+		local needOwnerEnemy = needOrZero(sk.nOwnerEnemy) -- 主人敵數（未填=0）
+		local needMyEnemy = needOrZero(sk.nMyEnemy) -- 自身敵數（未填=0）
+		local needRangeEnemy = needOrZero(sk.nRangeEnemy) -- 範圍敵數（未填=0）
+		-- 綜合條件：非排除、冷卻時間到、各種可選區間通過、敵數需求符合
 		if sk.when ~= excludeWhen and
 			t - sk.stemp >= sk.delay and
-			sk.sp[1] <= sp and sp <= sk.sp[2] and
-			nOwnerEnemy >= sk.nOwnerEnemy and
-			nMyEnemy >= sk.nMyEnemy and
-			nRangeEnemy >= sk.nRangeEnemy
+			okSp and okHp and okOwnerSp and okOwnerHp and
+			nOwnerEnemy >= needOwnerEnemy and
+			nMyEnemy >= needMyEnemy and
+			nRangeEnemy >= needRangeEnemy
 		then --符合使用的條件
-			if usedFlag==false and r[sk.target] <= sk.range then --在使用範圍內可使用
+			if usedFlag==false and r[sk.target] <= sk.range then --在使用範圍內可使用且尚未使用技能
 				--使用此技能
-				if sk.id == 0 then
+				if sk.id == 0 then -- 普通攻擊
 					Attack(myId, targets[sk.target])
-				elseif sk.castType == 0 then --自身類型
+					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
+				elseif sk.castType == 0 then --自身類型技能
 					SkillObject(myId, sk.lv, sk.id, myId)
-				elseif sk.castType == 1 then --目標類型
+				elseif sk.castType == 1 then --目標類型技能
 					SkillObject(myId, sk.lv, sk.id, targets[sk.target])
-				elseif sk.castType == 2 then --地面類型
-					local x,y = GetV(V_POSITION, targets[sk.target])
-					SkillGround(myId, sk.lv, sk.id, x, y)
+				elseif sk.castType == 2 then --地面類型技能
+					local x,y = GetV(V_POSITION, targets[sk.target]) -- 取得目標位置
+					SkillGround(myId, sk.lv, sk.id, x, y) -- 在目標位置施放地面技能
 				end
 				--更新記數
-				usedFlag = true
-				sk.count = sk.count + 1
-				if(sk.count >= sk.times)then
-					sk.count = 0
-					sk.stemp = t
+				usedFlag = true -- 標記已使用技能
+				sk.count = sk.count + 1 -- 增加技能使用次數
+				if(sk.count >= sk.times)then -- 如果達到使用次數限制
+					sk.count = 0 -- 重置計數
+					sk.stemp = t -- 更新最後使用時間
 				end
 			end
+			-- 計算追擊距離：如果有魔物目標且技能可追擊且距離超出範圍
 			if mobId > 0 and sk.chase == 1 and r[sk.target] > sk.range and minRadius > sk.range then
-				minRadius = sk.range
+				minRadius = sk.range -- 更新最小追擊半徑
 			end
 		end
 	end
-	if minRadius >= 100 then
-		return false
+	if minRadius >= 100 then -- 如果沒有需要追擊的技能
+		return false -- 回傳false表示無需追擊
 	end
-	return minRadius
+	return minRadius -- 回傳最小追擊半徑
 end
