@@ -4,9 +4,11 @@ FollowDis=3
 MoveDelay=500
 -- 搜尋/交戰半徑（格）：目標評分時用於判斷範圍內外（SearchSetting[7]/[8]）
 RadiusAggr=12
+-- 強制拉回距離（格）：超過此距離強制返回
+ForceReturnDis=12
 
 -- {主人被打,生命體被打,其他玩家被打,主人攻擊,生命體攻擊,其他玩家攻擊,範圍外,範圍內}
-SearchMode={{128,0,0,256,0,0,-1,-1},{256,128,0,25,30,128,-1,1}}
+SearchMode={{128,0,0,256,0,0,-128,-128},{256,128,0,256,30,64,-128,1}}
 
 -- 攻擊模式 1:被動 2:主動 對應SearchMode的索引
 SearchSetting=SearchMode[2]
@@ -67,7 +69,7 @@ Skill[#Skill].count=0
 
 Skill[#Skill+1]={}
 Skill[#Skill].id=8014 -- 混亂祈福
-Skill[#Skill].lv=5
+Skill[#Skill].lv=4
 Skill[#Skill].target=0
 Skill[#Skill].when=1
 Skill[#Skill].times=1
@@ -83,7 +85,7 @@ Skill[#Skill].count=0
 
 Skill[#Skill+1]={}
 Skill[#Skill].id=8014 -- 混亂祈福
-Skill[#Skill].lv=5
+Skill[#Skill].lv=3
 Skill[#Skill].target=0
 Skill[#Skill].when=1
 Skill[#Skill].times=1

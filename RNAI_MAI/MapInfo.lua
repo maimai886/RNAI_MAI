@@ -87,11 +87,11 @@ function DebugGetActors(myid, oid, title)
 			identity = "[其他]"
 		end
 		
-		TraceAI("  [" .. i .. "] " .. identity .. " ID=" .. tostring(actorId) .. 
+		TraceAI("  [" .. i .. "] " .. identity .. " 流水號=" .. tostring(actorId) .. 
 			" 位置=(" .. tostring(x) .. "," .. tostring(y) .. ")" ..
 			" 動作=" .. tostring(motion) ..
 			" 目標=" .. tostring(target) ..
-			" 腳色類型=" .. tostring(homunType) ..
+			" ID=" .. tostring(homunType) ..
 			" 物件類型=" .. tostring(type) ..
 			" 怪物=" .. tostring(isMonster) ..
 			" HP=" .. tostring(hp) .. "/" .. tostring(maxHp) ..
@@ -315,7 +315,14 @@ function RefreshData(myid,oid)
 				score = score + 500 -- 優先目標權重，比守衛模式高但比PvP低
 			-- 守衛模式：給離玩家最近的怪物高分，但分數比PvP玩家優先權重低
 			elseif((GuardMode~= 0) and i==nearestMonster)then
-				score = score + (999 - d1 - d2) -- 守衛模式，確保被選中距離越近分數越高
+				-- 守衛模式，根據距離給分，最遠距離為RadiusAggr，越遠分數越低，最遠為0分
+				local dist = d1 + d2
+				local maxDist = RadiusAggr * 2
+				local guardScore = 0
+				if dist < maxDist then
+					guardScore = math.floor((maxDist - dist) * 999 / maxDist)
+				end
+				score = score + guardScore
 			end
 		end
 

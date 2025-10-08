@@ -91,7 +91,7 @@ function log_var(arr)
 		local t=type(v)
 		if(t=="string")then
 			s = s..v.." "
-		elseif(t=="boolen")then
+		elseif(t=="boolean")then
 			s = s..(v and "True" or "False").." "
 		elseif(v==nil)then
 			s = s.."[nil] "
@@ -170,6 +170,17 @@ function AI(myid)
 	local msg=GetMsg(myid)
 	local rmsg=GetResMsg(myid)
 	local isHomunculus=GetV(V_HOMUNTYPE,myid)~=nil --是否為生命體
+
+	-- 強制拉回判斷
+	if type(ForceReturnDis) == "number" and oid and oid > 0 then
+		local mx, my = GetV(V_POSITION, myid)
+		local ox, oy = GetV(V_POSITION, oid)
+		local dis = getRectDis(mx, my, ox, oy)
+		if dis > ForceReturnDis then
+			MoveToDest(myid, ox, oy)
+			return
+		end
+	end
 	if InitStatus==0 then
 		AtkDis=GetV(V_ATTACKRANGE,myid)
 		InitStatus=1
@@ -363,9 +374,9 @@ function AI(myid)
 				local dis=getObjRectDis(myid,Target)
 				if(dis<=AtkDis)then
 					Attack(myid,Target)
-					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
+					DanceAttack_TryExecute(myid, Target, oid)
 				end
-				if(Target>0 and getObjRectDis(oid,Target)<15)then
+				if(Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
 					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
 					MoveToDest(myid,x,y)
 				end
@@ -373,7 +384,7 @@ function AI(myid)
 				--使用技能
 				local chaseDis = autoUseSkill(myid, oid, Target, 2)
 				--靠近以使用更多可能的技能
-				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<15)then
+				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
 					local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
 					MoveToDest(myid,x,y)
 				end
@@ -382,7 +393,7 @@ function AI(myid)
 	--攻擊目標
 	elseif (MyState==ST_ATTACK) then
 		-- 目標消失則回到先前狀態(FOLLOW)
-		if(Target<=0 or getObjRectDis(oid, Target)>15 or GetV(V_MOTION, Target)==MOTION_DEAD)then
+		if(Target<=0 or getObjRectDis(oid, Target)>RadiusAggr or GetV(V_MOTION, Target)==MOTION_DEAD)then
 			RemoveTarget()
 			MyState=ST_FOLLOW
 		else
@@ -392,9 +403,9 @@ function AI(myid)
 				local dis=getObjRectDis(myid,Target)
 				if(dis<=AtkDis)then
 					Attack(myid,Target)
-					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
+					DanceAttack_TryExecute(myid, Target, oid)
 				end
-				if(Target>0 and getObjRectDis(oid,Target)<15)then
+				if(Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
 					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
 					MoveToDest(myid,x,y)
 				end
@@ -402,7 +413,7 @@ function AI(myid)
 				--使用技能
 				local chaseDis = autoUseSkill(myid, oid, Target, 2)
 				--靠近以使用更多可能的技能
-				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<15)then
+				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
 					local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
 					MoveToDest(myid,x,y)
 				end
@@ -411,9 +422,9 @@ function AI(myid)
 	-- 對目標使用技能
 	elseif (MyState==ST_SKILL) then
 		local target = ManualSkill.target
-		if(getObjRectDis(oid, target)>15 or GetV(V_MOTION, target)==MOTION_DEAD)then
+		if(getObjRectDis(oid, target)>RadiusAggr or GetV(V_MOTION, target)==MOTION_DEAD)then
 			MyState=ST_FOLLOW
-		elseif(getObjRectDis(myid, target) <= target)then --在範圍內則使用技能
+		elseif(getObjRectDis(myid, target) <= ManualSkill.range)then --在範圍內則使用技能
 			SkillObject(myid, ManualSkill.lv, ManualSkill.id, target)
 			if(IsMonster(target)==1)then
 				Target = target
@@ -476,23 +487,23 @@ function GetAutoSkill(myid) --從技能列表找出適當的技能 回傳idx及�
 end
 
 -- 從技能列表使用技能，回傳追擊格數
-function autoUseSkill(myId, ownerId, mobId, excludeWhen) --從技能列表使用技能，回傳追擊格數
+function autoUseSkill(myid, oid, mobId, excludeWhen) --從技能列表使用技能，回傳追擊格數
 	local minRadius = 100 -- 最小追擊半徑，初始值設為100
 	local r = { -- 距離陣列，儲存與不同目標的距離
-		[0] = getObjRectDis(myId, mobId), --sk.target=0 (魔物) 與魔物的距離
-		[1] = getObjRectDis(myId, ownerId), --sk.target=1 (主人) 與主人的距離
+		[0] = getObjRectDis(myid, mobId), --sk.target=0 (魔物) 與魔物的距離
+		[1] = getObjRectDis(myid, oid), --sk.target=1 (主人) 與主人的距離
 		[2] = 0 --sk.target=2 (生命體/傭兵) 對自身使用技能距離為0
 	}
 	local targets = { -- 目標陣列，儲存不同目標的ID
 		[0] = mobId, --sk.target=0 (魔物) 魔物ID
-		[1] = ownerId, --sk.target=1 (主人) 主人ID
-		[2] = myId --sk.target=2 (生命體/傭兵) 自身ID
+		[1] = oid, --sk.target=1 (主人) 主人ID
+		[2] = myid --sk.target=2 (生命體/傭兵) 自身ID
 	}
 	local t = GetTick() -- 取得當前時間戳記
-	local sp = GetV(V_SP, myId) / GetV(V_MAXSP, myId) * 100 -- 計算生命體SP百分比
-	local hp = GetV(V_HP, myId) / GetV(V_MAXHP, myId) * 100 -- 計算生命體HP百分比
-	local ownerSp=GetV(V_SP,ownerId)/GetV(V_MAXSP,ownerId)*100 -- 計算主人SP百分比
-	local ownerHp=GetV(V_HP,ownerId)/GetV(V_MAXHP,ownerId)*100 -- 計算主人HP百分比
+	local sp = GetV(V_SP, myid) / GetV(V_MAXSP, myid) * 100 -- 計算生命體SP百分比
+	local hp = GetV(V_HP, myid) / GetV(V_MAXHP, myid) * 100 -- 計算生命體HP百分比
+	local ownerSp=GetV(V_SP,oid)/GetV(V_MAXSP,oid)*100 -- 計算主人SP百分比
+	local ownerHp=GetV(V_HP,oid)/GetV(V_MAXHP,oid)*100 -- 計算主人HP百分比
 	local usedFlag = false -- 技能使用標記，確保一次只使用一個技能
 	for i, sk in ipairs(Skill) do -- 遍歷所有技能
 		-- 條件預先判斷（有填才檢查）
@@ -514,15 +525,15 @@ function autoUseSkill(myId, ownerId, mobId, excludeWhen) --從技能列表使用
 			if usedFlag==false and r[sk.target] <= sk.range then --在使用範圍內可使用且尚未使用技能
 				--使用此技能
 				if sk.id == 0 then -- 普通攻擊
-					Attack(myId, targets[sk.target])
-					DanceAttack_TryExecute(myId, targets[sk.target], ownerId)
+					Attack(myid, targets[sk.target])
+					DanceAttack_TryExecute(myid, targets[sk.target], oid)
 				elseif sk.castType == 0 then --自身類型技能
-					SkillObject(myId, sk.lv, sk.id, myId)
+					SkillObject(myid, sk.lv, sk.id, myid)
 				elseif sk.castType == 1 then --目標類型技能
-					SkillObject(myId, sk.lv, sk.id, targets[sk.target])
+					SkillObject(myid, sk.lv, sk.id, targets[sk.target])
 				elseif sk.castType == 2 then --地面類型技能
 					local x,y = GetV(V_POSITION, targets[sk.target]) -- 取得目標位置
-					SkillGround(myId, sk.lv, sk.id, x, y) -- 在目標位置施放地面技能
+					SkillGround(myid, sk.lv, sk.id, x, y) -- 在目標位置施放地面技能
 				end
 				--更新記數
 				usedFlag = true -- 標記已使用技能
