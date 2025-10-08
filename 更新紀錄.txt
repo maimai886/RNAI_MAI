@@ -1,9 +1,14 @@
 
 現階段更新紀錄
+v1.6.2
+[修正]
+1.暫時刪除走失相關代碼
+
 v1.6.1
 [修正]
 1.使用WeakTargets以及MainTargets時的錯誤問題。
 [新增]強制拉回距離ForceReturnDis(homcfg)，減少孩童走失問題。
+
 
 v1.6.0
 [新增]

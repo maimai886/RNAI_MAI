@@ -170,17 +170,7 @@ function AI(myid)
 	local msg=GetMsg(myid)
 	local rmsg=GetResMsg(myid)
 	local isHomunculus=GetV(V_HOMUNTYPE,myid)~=nil --是否為生命體
-
-	-- 強制拉回判斷
-	if type(ForceReturnDis) == "number" and oid and oid > 0 then
-		local mx, my = GetV(V_POSITION, myid)
-		local ox, oy = GetV(V_POSITION, oid)
-		local dis = getRectDis(mx, my, ox, oy)
-		if dis > ForceReturnDis then
-			MoveToDest(myid, ox, oy)
-			return
-		end
-	end
+	
 	if InitStatus==0 then
 		AtkDis=GetV(V_ATTACKRANGE,myid)
 		InitStatus=1
