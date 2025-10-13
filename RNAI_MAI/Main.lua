@@ -319,34 +319,53 @@ function AI(myid)
 			-- TraceAI("ST_HOLD")
 		end
 	--跟隨
-	elseif (MyState==ST_FOLLOW) then
-		-- 常駐技能使用
-		autoUseSkill(myid, oid, oid, 1) --第三個參數原本是怪物id，這邊用 oid
-		if(bestTarget>0 and Mobs[bestTarget][5]>=0)then
-			MyState=ST_ATTACK_PRE
+	elseif (MyState == ST_FOLLOW) then
+		-- 常駐技能（自補 / Buff）
+		autoUseSkill(myid, oid, oid, 1)
+		
+		-- 同步主人的鎖定目標（優先權最高）
+		local ownerTarget = GetV(V_TARGET, oid)
+		local ownerTargetDead = (ownerTarget <= 0 or GetV(V_MOTION, ownerTarget) == MOTION_DEAD)
+		if ownerTarget > 0 and not ownerTargetDead then
+			-- 若主人鎖定有效目標 → 生命體立即同步鎖定並進入攻擊準備階段
+			if Target ~= ownerTarget then
+				Target = ownerTarget
+				MyState = ST_ATTACK_PRE
+				TraceAI(" 同步主鎖定目標：" .. ownerTarget)
+			end
+		else
+			-- 若主人未鎖定任何目標 → 使用 RefreshData 的結果（bestTarget）
+			if bestTarget > 0 and Mobs[bestTarget][5] >= 0 then
+				Target = Mobs[bestTarget][1]
+				MyState = ST_ATTACK_PRE
+			end
 		end
 		
-		-- 守衛模式或一般跟隨模式
-		if(MyState==ST_FOLLOW)then
-			if(GuardMode==1)then
-				-- 守衛模式：生命體保持在玩家前方
-				local guardX, guardY = getGuardPosition(myid, oid)
-				if(guardX ~= nil and guardY ~= nil)then
-					MoveToDest(myid, guardX, guardY)
-				end
-			elseif(GuardMode==2)then
-				-- 轉圈模式：生命體在玩家周圍轉圈
-				local circleX, circleY = getCirclePosition(myid, oid)
-				if(circleX ~= nil and circleY ~= nil)then
-					MoveToDest(myid, circleX, circleY)
-				end
-			else
-				-- 一般跟隨模式：保持跟隨距離
-				if(getObjRectDis(oid,myid)>FollowDis)then
-					local x1,y1=GetV(V_POSITION,oid)
-					local x2,y2=GetV(V_POSITION,myid)
-					local dx,dy=getRectPos(x1,y1,x2,y2,FollowDis)
-					Move(myid,dx,dy)
+		-- 跟隨邏輯
+		if(GuardMode == 1) then
+			-- 守衛模式：生命體保持在玩家前方
+			local guardX, guardY = getGuardPosition(myid, oid)
+			if(guardX ~= nil and guardY ~= nil) then
+				MoveToDest(myid, guardX, guardY)
+			end
+		elseif(GuardMode == 2) then
+			-- 轉圈模式：生命體在玩家周圍轉圈
+			local circleX, circleY = getCirclePosition(myid, oid)
+			if(circleX ~= nil and circleY ~= nil) then
+				MoveToDest(myid, circleX, circleY)
+			end
+		else
+			-- 一般跟隨模式：保持跟隨距離
+			local disToOwner = getObjRectDis(oid, myid)
+			if disToOwner > FollowDis then
+				local x1, y1 = GetV(V_POSITION, oid)
+				local x2, y2 = GetV(V_POSITION, myid)
+				local dx, dy = getRectPos(x1, y1, x2, y2, FollowDis)
+				-- 節流（500ms 一次移動命令，防止卡頓）
+				local now = GetTick()
+				if (now - FollowCmdTime) > 500 then
+					Move(myid, dx, dy)
+					FollowCmdTime = now
 				end
 			end
 		end
