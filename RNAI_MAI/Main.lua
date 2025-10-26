@@ -31,6 +31,15 @@ MyMotion=0
 MyMotion_t=0
 EnableNormalAttack=true
 
+ -- 載入日誌模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/Log.lua") end)
+
+ -- 載入避障模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/AvoidObstacle.lua") end)
+
+ -- 載入 PvP 模組
+ pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/PvP.lua") end)
+
  -- 載入好友系統模組
  pcall(function() dofile("./AI/USER_AI/RNAI_MAI/modules/Friends.lua") end)
 
@@ -83,23 +92,6 @@ function isWeakTarget(t)
 		end
 	end
 	return false
-end
-
-function log_var(arr)
-	local s = ""
-	for i,v in ipairs(arr) do
-		local t=type(v)
-		if(t=="string")then
-			s = s..v.." "
-		elseif(t=="boolean")then
-			s = s..(v and "True" or "False").." "
-		elseif(v==nil)then
-			s = s.."[nil] "
-		elseif(t=="number")then
-			s = s..v.." "
-		end
-	end
-	TraceAI(s)
 end
 
 function getSepcFilename(myid)
@@ -179,7 +171,6 @@ function AI(myid)
 			EnableNormalAttack=false
 		end
 		local sepcFilename = getSepcFilename(myid)
-		-- log_var("sepcFilename = ",sepcFilename)
 		if(type(sepcFilename)=="string" and file_exist(sepcFilename))then
 			-- TraceAI("file "..sepcFilename.." exist")
 			dofile(sepcFilename)
@@ -193,6 +184,11 @@ function AI(myid)
 		
 		-- 載入持久化好友數據
 		LoadFriendsData()
+		
+		-- 只在啟用 PvP 模式時載入狙擊目標數據
+		if IsPvPEnabled and IsPvPEnabled() then
+			LoadSniperTargets()
+		end
 		
 		return
 	elseif InitStatus==1 then
@@ -266,17 +262,20 @@ function AI(myid)
 		MyState=ST_ATTACK
 		Target=msg[2]
 		if(isHomunculus) then
-			TraceAI("id:"..msg[2]..",type"..GetV(V_HOMUNTYPE,msg[2]))
+			LogAI("攻擊指令 目標ID:" .. msg[2] .. " 類型:" .. tostring(GetV(V_HOMUNTYPE,msg[2])), "combat")
 		end
 	elseif msg[1]==SKILL_OBJECT_CMD then
 		-- 技能指令（目標型）
 		-- 效果：設定對單一對象施放的技能與等級；若距離不足會自動接近，
-		--       進入 `ST_SKILL` 狀態，施放後若對象是怪物會轉入攻擊，否則回到跟隨。
+		--       進入 `ST_SKILL` 狀態，施放後若對象是怪物或玩家職業會轉入攻擊，否則回到跟隨。
 		MyState=ST_SKILL
 		ManualSkill.lv = msg[2]
 		ManualSkill.id = msg[3]
 		ManualSkill.target = msg[4]
 		ManualSkill.range = GetV(V_SKILLATTACKRANGE_LEVEL, myid, ManualSkill.id, ManualSkill.lv)
+		
+		-- 狙擊模式：記錄玩家主動使用技能攻擊的目標
+		Sniper_HandleAttackCommand(msg[4], msg[3], myid, oid)
 	elseif msg[1]==SKILL_AREA_CMD then
 		-- 技能指令（地面型）
 		-- 效果：設定對地面座標施放的技能與等級；若距離不足會自動接近，
@@ -289,10 +288,10 @@ function AI(myid)
 		ManualSkill.range = GetV(V_SKILLATTACKRANGE_LEVEL, myid, ManualSkill.id, ManualSkill.lv)
 	end
 	if(msg[1]==NONE_CMD)then -- 預約指令
-		-- 效果：處理保留（預約）指令。搭配 Shift/Alt 右鍵可把移動/攻擊加入預約佇列。
+		-- 效果：處理保留（預約）指令。搭配 Alt Shift 右鍵可把移動/攻擊加入預約佇列。
 		if(rmsg[1]==MOVE_CMD)then
 			if(MyState==ST_MOVE_CMD or MyState==ST_HOLD)then
-				-- 以移動矩形範圍加入好友（改用模組）
+				-- 以移動矩形範圍加入好友
 				local x1,y1=math.min(DestX,rmsg[2]),math.min(DestY,rmsg[3])
 				local x2,y2=math.max(DestX,rmsg[2]),math.max(DestY,rmsg[3])
 				Friends_AddInRect(x1,y1,x2,y2)
@@ -304,11 +303,19 @@ function AI(myid)
 			end
 		end
 		if(rmsg[1]==ATTACK_OBJECT_CMD)then
-			-- 攻擊預約 → 好友清單維護（改用模組）
-			if(rmsg[2]==myid)then
-				Friends_Clear()
-			else
-				Friends_Add(rmsg[2])
+			-- 攻擊預約 → 好友清單維護
+			-- 檢查 ID 是否有效（必須是數字且大於0）
+			if type(rmsg[2]) == "number" and rmsg[2] > 0 then
+				if(rmsg[2]==myid)then
+					-- Alt Shift+右鍵點生命體自己 = 清空好友列表
+					Friends_Clear()
+				elseif(rmsg[2]==oid)then
+					-- Alt Shift+右鍵點主人 = 快照加入當前屏幕所有玩家
+					Friends_SnapshotAll(myid, oid)
+				else
+					-- Alt Shift+右鍵點其他對象 = 加入單個好友
+					Friends_Add(rmsg[2])
+				end
 			end
 		end
 	end
@@ -352,9 +359,17 @@ function AI(myid)
 		end
 	--追擊目標
 	elseif (MyState==ST_ATTACK_PRE) then
-		-- 目標消失則回到先前狀態(FOLLOW)
-		if(bestTarget<=0 or Mobs[bestTarget][5]<0)then
+		-- 優先檢查生命體是否離主人太遠
+		local myDistToOwner = getObjRectDis(myid, oid)
+		if myDistToOwner > RadiusAggr then
+			LogAI("追擊時距離主人太遠(" .. myDistToOwner .. "格)，返回主人身邊", "combat")
 			RemoveTarget()
+			if Avoid_Reset then Avoid_Reset() end
+			MyState=ST_FOLLOW
+		-- 目標消失則回到先前狀態(FOLLOW)
+		elseif(bestTarget<=0 or Mobs[bestTarget][5]<0)then
+			RemoveTarget()
+			if Avoid_Reset then Avoid_Reset() end
 			MyState=ST_FOLLOW
 		else
 			Target=Mobs[bestTarget][1]
@@ -367,24 +382,52 @@ function AI(myid)
 					DanceAttack_TryExecute(myid, Target, oid)
 				end
 				if(Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
-					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
-					MoveToDest(myid,x,y)
+					-- 使用避障移動
+					if Avoid_MoveTo then
+						local moveResult = Avoid_MoveTo(myid, Target, AtkDis, oid)
+						if moveResult == "change_target" then
+							-- 卡住次數過多，放棄目標並尋找新目標
+							RemoveTarget()
+							MyState = ST_FOLLOW
+						end
+					else
+						local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
+						MoveToDest(myid,x,y)
+					end
 				end
 			else
 				--使用技能
 				local chaseDis = autoUseSkill(myid, oid, Target, 2)
 				--靠近以使用更多可能的技能
 				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
-					local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
-					MoveToDest(myid,x,y)
+					-- 使用避障移動
+					if Avoid_MoveTo then
+						local moveResult = Avoid_MoveTo(myid, Target, chaseDis, oid)
+						if moveResult == "change_target" then
+							-- 卡住次數過多，放棄目標並尋找新目標
+							RemoveTarget()
+							MyState = ST_FOLLOW
+						end
+					else
+						local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
+						MoveToDest(myid,x,y)
+					end
 				end
 			end
 		end
 	--攻擊目標
 	elseif (MyState==ST_ATTACK) then
-		-- 目標消失則回到先前狀態(FOLLOW)
-		if(Target<=0 or getObjRectDis(oid, Target)>RadiusAggr or GetV(V_MOTION, Target)==MOTION_DEAD)then
+		-- 優先檢查生命體是否離主人太遠
+		local myDistToOwner = getObjRectDis(myid, oid)
+		if myDistToOwner > RadiusAggr then
+			LogAI("攻擊時距離主人太遠(" .. myDistToOwner .. "格)，返回主人身邊", "combat")
 			RemoveTarget()
+			if Avoid_Reset then Avoid_Reset() end
+			MyState=ST_FOLLOW
+		-- 目標消失則回到先前狀態(FOLLOW)
+		elseif(Target<=0 or getObjRectDis(oid, Target)>RadiusAggr or GetV(V_MOTION, Target)==MOTION_DEAD)then
+			RemoveTarget()
+			if Avoid_Reset then Avoid_Reset() end
 			MyState=ST_FOLLOW
 		else
 			-- 進入技能判定
@@ -396,35 +439,75 @@ function AI(myid)
 					DanceAttack_TryExecute(myid, Target, oid)
 				end
 				if(Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
-					local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
-					MoveToDest(myid,x,y)
+					-- 使用避障移動
+					if Avoid_MoveTo then
+						local moveResult = Avoid_MoveTo(myid, Target, AtkDis, oid)
+						if moveResult == "change_target" then
+							-- 卡住次數過多，放棄目標並尋找新目標
+							RemoveTarget()
+							MyState = ST_FOLLOW
+						end
+					else
+						local x,y=getFreeObjRectPos(Target,myid,AtkDis,oid)
+						MoveToDest(myid,x,y)
+					end
 				end
 			else
 				--使用技能
 				local chaseDis = autoUseSkill(myid, oid, Target, 2)
 				--靠近以使用更多可能的技能
 				if(chaseDis~=false and Target>0 and getObjRectDis(oid,Target)<RadiusAggr)then
-					local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
-					MoveToDest(myid,x,y)
+					-- 使用避障移動
+					if Avoid_MoveTo then
+						local moveResult = Avoid_MoveTo(myid, Target, chaseDis, oid)
+						if moveResult == "change_target" then
+							-- 卡住次數過多，放棄目標並尋找新目標
+							RemoveTarget()
+							MyState = ST_FOLLOW
+						end
+					else
+						local x,y=getFreeObjRectPos(Target,myid,chaseDis,oid)
+						MoveToDest(myid,x,y)
+					end
 				end
 			end
 		end
 	-- 對目標使用技能
 	elseif (MyState==ST_SKILL) then
 		local target = ManualSkill.target
-		if(getObjRectDis(oid, target)>RadiusAggr or GetV(V_MOTION, target)==MOTION_DEAD)then
+		-- 優先檢查生命體是否離主人太遠
+		local myDistToOwner = getObjRectDis(myid, oid)
+		if myDistToOwner > RadiusAggr then
+			LogAI("使用技能時距離主人太遠(" .. myDistToOwner .. "格)，返回主人身邊", "combat")
+			if Avoid_Reset then Avoid_Reset() end
+			MyState=ST_FOLLOW
+		elseif(getObjRectDis(oid, target)>RadiusAggr or GetV(V_MOTION, target)==MOTION_DEAD)then
+			if Avoid_Reset then Avoid_Reset() end
 			MyState=ST_FOLLOW
 		elseif(getObjRectDis(myid, target) <= ManualSkill.range)then --在範圍內則使用技能
 			SkillObject(myid, ManualSkill.lv, ManualSkill.id, target)
-			if(IsMonster(target)==1)then
+			-- 檢查是否應該轉入攻擊狀態：怪物或玩家職業
+			local isMonster = (IsMonster(target)==1)
+			local jobType = GetV(V_HOMUNTYPE, target)
+			local isPlayerJob = (jobType ~= nil and PLAYER_JOBS[jobType] ~= nil)
+			if(isMonster or isPlayerJob)then
 				Target = target
 				MyState = ST_ATTACK
 			else
 				MyState = ST_FOLLOW
 			end
 		else -- 如果距離太遠需要追擊
-			local x,y=getFreeObjRectPos(target, myid, ManualSkill.range, oid)
-			MoveToDest(myid, x, y)
+			-- 使用避障移動
+			if Avoid_MoveTo then
+				local moveResult = Avoid_MoveTo(myid, target, ManualSkill.range, oid)
+				if moveResult == "change_target" then
+					-- 技能追擊時卡住次數過多，放棄並返回跟隨
+					MyState = ST_FOLLOW
+				end
+			else
+				local x,y=getFreeObjRectPos(target, myid, ManualSkill.range, oid)
+				MoveToDest(myid, x, y)
+			end
 		end
 	-- 對地面使用技能
 	elseif (MyState==ST_SKILL_GND) then

@@ -1,4 +1,5 @@
 -- 本檔案包含戰場物件與管理
+-- 注意：PvP 與 Log 功能已模組化，請參考 modules/PvP.lua 與 modules/Log.lua
 
 -- 怪物清單：關聯陣列，key為怪物ID，value為怪物資料陣列
 -- 怪物資料格式：{怪物ID, 此魔物攻擊對象ID, 其他人攻擊此魔物的時間, 是否在視線內(RefreshKey|-1), 分數}
@@ -60,16 +61,16 @@ end
 function DebugGetActors(myid, oid, title)
 	title = title or "GetActors 詳細資訊"
 	local A = GetActors()
-	TraceAI("=== " .. title .. " ===")
-	TraceAI("GetActors 數量: " .. tostring(#A))
-	TraceAI("GetActors 內容展開:")
+	LogAI("=== " .. title .. " ===", "map")
+	LogAI("GetActors 數量: " .. tostring(#A), "map")
+	LogAI("GetActors 內容展開:", "map")
 	
 	for i, actorId in ipairs(A) do
 		local x, y = GetV(V_POSITION, actorId)
 		local motion = GetV(V_MOTION, actorId)
 		local target = GetV(V_TARGET, actorId)
 		local homunType = GetV(V_HOMUNTYPE, actorId)
-		local type = GetV(V_TYPE, actorId)
+		-- local type = GetV(V_TYPE, actorId) -- V_TYPE 未開放，不使用
 		local isMonster = IsMonster(actorId)
 		local hp = GetV(V_HP, actorId)
 		local maxHp = GetV(V_MAXHP, actorId)
@@ -87,17 +88,16 @@ function DebugGetActors(myid, oid, title)
 			identity = "[其他]"
 		end
 		
-		TraceAI("  [" .. i .. "] " .. identity .. " 流水號=" .. tostring(actorId) .. 
+		LogAI("  [" .. i .. "] " .. identity .. " 流水號=" .. tostring(actorId) .. 
 			" 位置=(" .. tostring(x) .. "," .. tostring(y) .. ")" ..
 			" 動作=" .. tostring(motion) ..
 			" 目標=" .. tostring(target) ..
-			" ID=" .. tostring(homunType) ..
-			" 物件類型=" .. tostring(type) ..
+			" 類型ID=" .. tostring(homunType) ..
 			" 怪物=" .. tostring(isMonster) ..
 			" HP=" .. tostring(hp) .. "/" .. tostring(maxHp) ..
-			" 主人=" .. tostring(owner))
+			" 主人=" .. tostring(owner), "map")
 	end
-	TraceAI("=== " .. title .. " 結束 ===")
+	LogAI("=== " .. title .. " 結束 ===", "map")
 end
 
 --- 檢查並輸出好友清單
@@ -106,13 +106,13 @@ end
 --- @return nil
 function DebugFriends(myid, oid)
 	local friendsList = GetFriendsList()
-	TraceAI("=== 好友清單檢查 ===")
-	TraceAI("好友數量: " .. tostring(#friendsList))
+	LogAI("=== 好友清單檢查 ===", "friend")
+	LogAI("好友數量: " .. tostring(#friendsList), "friend")
 	
 	if #friendsList == 0 then
-		TraceAI("好友清單為空")
+		LogAI("好友清單為空", "friend")
 	else
-		TraceAI("好友清單內容:")
+		LogAI("好友清單內容:", "friend")
 		for i, friendId in ipairs(friendsList) do
 			-- 檢查 friendId 是否為有效數字，避免 GetV 錯誤
 			if type(friendId) == "number" then
@@ -137,20 +137,20 @@ function DebugFriends(myid, oid)
 					identity = "[其他]"
 				end
 				
-				TraceAI("  好友[" .. i .. "] " .. identity .. " ID=" .. tostring(friendId) .. 
+				LogAI("  好友[" .. i .. "] " .. identity .. " ID=" .. tostring(friendId) .. 
 					" 位置=(" .. tostring(x) .. "," .. tostring(y) .. ")" ..
 					" 動作=" .. tostring(motion) ..
 					" 目標=" .. tostring(target) ..
 					" 類型=" .. tostring(homunType) ..
 					" 怪物=" .. tostring(isMonster) ..
 					" HP=" .. tostring(hp) .. "/" .. tostring(maxHp) ..
-					" 主人=" .. tostring(owner))
+					" 主人=" .. tostring(owner), "friend")
 			else
-				TraceAI("  好友[" .. i .. "] 無效ID: " .. tostring(friendId))
+				LogAI("  好友[" .. i .. "] 無效ID: " .. tostring(friendId), "friend")
 			end
 		end
 	end
-	TraceAI("=== 好友清單檢查結束 ===")
+	LogAI("=== 好友清單檢查結束 ===", "friend")
 end
 
 --- 檢查指定座標是否有怪物
@@ -160,13 +160,25 @@ end
 function XYInMobs(x,y)
 	local a,b
 	local Objs=GetActors()
+	-- 先精確匹配
 	for i,v in ipairs(Objs)do
 		a,b=GetV(V_POSITION,v)
 		if(a==x and b==y)then
 			return v
 		end
 	end
-	return false
+	-- 如果精確匹配失敗，查找1格範圍內最近的對象
+	local nearestId = false
+	local minDist = 2  -- 只查找1格範圍內
+	for i,v in ipairs(Objs)do
+		a,b=GetV(V_POSITION,v)
+		local dist = math.abs(a-x) + math.abs(b-y)  -- 曼哈頓距離
+		if dist < minDist then
+			minDist = dist
+			nearestId = v
+		end
+	end
+	return nearestId
 end
 --- 清除當前最佳目標
 --- @return nil
@@ -198,7 +210,6 @@ function RefreshData(myid,oid)
 	nRangeEnemy=0 -- 重置範圍內敵人數量
 	RefreshKey=(RefreshKey+1)%30000 -- 更新掃描標記，用於判斷物件是否過期
 	local A=GetActors() -- 取得視線內所有物件
-	local enablePvP = (PvPMode~=nil and PvPMode==1)
 	-- 輸出 GetActors 內容
 	DebugGetActors(myid, oid, "RefreshData 掃描")
 	-- 檢查好友清單
@@ -215,29 +226,15 @@ function RefreshData(myid,oid)
 		-- 指定攻擊模式檢查：若TargetMonsters有值，只攻擊清單中的怪物
 		local isTargetMode = (TargetMonsters~=nil and #TargetMonsters>0)
 		local isInTargetList = (isTargetMode and mobTypeId~=nil and (TargetMonsters[mobTypeId]~=nil or tb_exist(TargetMonsters,mobTypeId))) and true or false
-		-- PvP 模式
-		local isPlayerLike = (IsMonster(v)==0)
-		local isActivePlayer = false
 		
-		-- 如果是非怪物且啟用PvP，檢查是否為活躍玩家
-		if enablePvP and isPlayerLike and v~=oid and v~=myid and tb_exist(GetFriendsList(),v)==false then
-			local motion = GetV(V_MOTION, v)
-			local target = GetV(V_TARGET, v)
-			
-			-- 檢查是否有活動跡象：移動、攻擊、放技能或有攻擊目標
-			if motion==MOTION_MOVE or motion==MOTION_RUN or
-			   motion==MOTION_ATTACK or motion==MOTION_ATTACK2 or motion==MOTION_ATTACK3 or
-			   motion==MOTION_SKILL or motion==MOTION_SKILL2 or motion==MOTION_SKILL3 or
-			   (target>0 and IsMonster(target)==1) then
-				isActivePlayer = true
-			end
-		end
+		-- PvP 模式：使用 PvP 模組判斷是否為攻擊目標
+		local isPvPTarget = IsPvPTarget(v, myid, oid)
 		
 		-- 判斷是否加入Mobs清單：
 		-- 1) 怪物：非忽略 + (非指定模式 或 在指定清單中)
-		-- 2) 玩家（PvP）：啟用PvP + 活躍玩家
+		-- 2) 玩家（PvP）：由 PvP 模組判斷
 		if( (IsMonster(v)==1 and isignored==false and (not isTargetMode or isInTargetList))
-			or (enablePvP and isActivePlayer) ) then
+			or isPvPTarget ) then
 			if(GetV(V_MOTION,v)~=MOTION_DEAD)then -- 檢查存活
 				if Mobs[v]==nil then -- 未在清單則加入
 					Mobs[v]={v,0,0,0}
@@ -307,9 +304,14 @@ function RefreshData(myid,oid)
 		
 		-- 判斷是否為主動模式
 		if(isActiveMode)then
-			-- PvP優先： 最先攻擊玩家(但因為官方提供的函數只能判斷是否為怪物，現在藉由活動跡象判斷是否為玩家，但有機會會判斷錯誤)
-			if(enablePvP and IsMonster(i)==0)then
-				score = score + 999 -- PvP玩家優先權重
+			-- PvP優先： 最先攻擊玩家（透過 PvP 模組判斷）
+			if(IsPvPEnabled() and IsMonster(i)==0)then
+				-- 檢查是否為優先職業
+				if(IsPriorityPvPTarget(i))then
+					score = score + 1200 -- PvP優先職業最高權重
+				else
+					score = score + 900 -- PvP一般玩家權重
+				end
 			-- 優先攻擊目標：給予優先目標列表中的怪物高權重
 			elseif(MainTargets~=nil and #MainTargets>0 and mobTypeId~=nil and (MainTargets[mobTypeId]~=nil or tb_exist(MainTargets,mobTypeId)))then
 				score = score + 500 -- 優先目標權重，比守衛模式高但比PvP低
@@ -360,7 +362,7 @@ function RefreshData(myid,oid)
 			score = score + SearchSetting[7] -- 範圍外權重
 		end
 		
-		TraceAI("score = " .. score)
+		LogAI("score = " .. score, "combat")
 		Mobs[i][5]=score
 		if(score>max_score)then
 			max_score=score

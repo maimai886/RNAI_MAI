@@ -99,12 +99,6 @@ LogCategories = {
 --   1. 距離主人超過 RadiusAggr 時自動放棄繞路
 --   2. 繞路超過 maxAvoidTime 時自動放棄
 -- 以下參數可以調整（可選，不設置則使用默認值）
--- 自動避障功能：打怪時卡住會自動繞路
--- 避障系統會自動檢測生命體是否卡住，並嘗試繞路接近目標
--- 安全機制：
---   1. 距離主人超過 RadiusAggr 時自動放棄繞路
---   2. 繞路超過 maxAvoidTime 時自動放棄
--- 以下參數可以調整（可選，不設置則使用默認值）
 AvoidState = AvoidState or {}        -- 初始化避障狀態表格，避免報錯
 AvoidState.checkInterval = 1000      -- 檢查卡住間隔（毫秒）
 AvoidState.stuckThreshold = 3        -- 判定卡住的移動距離（格子）
