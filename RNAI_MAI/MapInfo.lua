@@ -36,21 +36,18 @@ end
 --- 獲取好友清單
 --- @return table 好友清單
 function GetFriendsList()
-	-- 如果 friends 變數不存在，從文件載入
-	if friends == nil then
-		local success, err = pcall(function()
-			local friendsFile = "./AI/USER_AI/RNAI_MAI/custom/friends_data.lua"
-			if file_exist(friendsFile) then
-				dofile(friendsFile)
-			else
-				friends = {}
-			end
-		end)
-		if not success then
-			friends = {}
+	-- 從文件讀取好友列表
+	if GetFriends then
+		local friendsList = GetFriends()
+		-- 轉換為純ID列表
+		local idList = {}
+		for i, friend in ipairs(friendsList) do
+			local friendId = type(friend) == "table" and friend.id or friend
+			idList[#idList+1] = friendId
 		end
+		return idList
 	end
-	return friends
+	return {}
 end
 
 --- 輸出 GetActors 詳細資訊的函數

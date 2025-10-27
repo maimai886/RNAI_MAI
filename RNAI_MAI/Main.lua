@@ -182,14 +182,6 @@ function AI(myid)
 			end
 		end
 		
-		-- 載入持久化好友數據
-		LoadFriendsData()
-		
-		-- 只在啟用 PvP 模式時載入狙擊目標數據
-		if IsPvPEnabled and IsPvPEnabled() then
-			LoadSniperTargets()
-		end
-		
 		return
 	elseif InitStatus==1 then
 		InitStatus=2

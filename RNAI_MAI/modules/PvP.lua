@@ -11,9 +11,6 @@
 -- 狙擊目標資料檔案
 local SNIPER_FILE = "./AI/USER_AI/RNAI_MAI/custom/sniper_targets.lua"
 
--- 狙擊目標清單：記錄玩家主動攻擊指令標記的目標ID
-sniperTargets = sniperTargets or {}
-
 -- 玩家職業列表（用於 PvP 模式）
 PLAYER_JOBS = {
 	[0] = "初心者",
@@ -32,6 +29,24 @@ end
 --- @return boolean 是否為狙擊模式
 function IsSniperMode()
 	return (PvPMode ~= nil and PvPMode == 2)
+end
+
+--- 從文件讀取狙擊目標列表
+--- @return table 狙擊目標列表
+function GetSniperTargets()
+	local targets = {}
+	local success, err = pcall(function()
+		if file_exist(SNIPER_FILE) then
+			dofile(SNIPER_FILE)
+			if sniperTargets ~= nil then
+				targets = sniperTargets
+			end
+		end
+	end)
+	if not success then
+		LogAI("讀取狙擊目標時發生錯誤: " .. tostring(err), "pvp")
+	end
+	return targets
 end
 
 --- 檢查指定物件是否為 PvP 攻擊目標
@@ -62,11 +77,16 @@ function IsPvPTarget(actorId, myid, oid)
 	
 	-- 狙擊模式：攻擊記錄的目標 + 主人正在攻擊的玩家
 	if IsSniperMode() then
+		-- 從文件讀取最新的狙擊目標列表
+		local targets = GetSniperTargets()
+		
 		-- 檢查是否在狙擊列表中
-		local isSnipeTarget = tb_exist(sniperTargets, actorId)
-		if isSnipeTarget then
-			LogAI("PvP狙擊目標（列表中）: ID=" .. tostring(actorId), "pvp")
-			return true
+		for i, target in ipairs(targets) do
+			local targetId = type(target) == "table" and target.id or target
+			if targetId == actorId then
+				LogAI("PvP狙擊目標（列表中）: ID=" .. tostring(actorId), "pvp")
+				return true
+			end
 		end
 		
 		-- 檢查是否為主人正在攻擊/施法的目標
@@ -117,72 +137,6 @@ end
 
 
 -- ==================== 狙擊模式相關功能 ====================
-
---- 儲存狙擊目標清單到檔案（含職業資訊）
---- @return boolean 是否成功
-function SaveSniperTargets()
-	local success, err = pcall(function()
-		local file = io.open(SNIPER_FILE, "w")
-		if not file then
-			LogAI("無法創建狙擊目標數據文件: " .. SNIPER_FILE, "pvp")
-			return false
-		end
-		file:write("-- 狙擊目標持久化文件\n")
-		file:write("-- 自動生成，請勿手動修改\n")
-		file:write("-- 格式：ID, -- 職業名稱\n\n")
-		file:write("sniperTargets = {\n")
-		-- 記數器
-		local count = 0
-		for i, targetId in ipairs(sniperTargets) do
-			-- 嘗試獲取目標職業資訊
-			local jobType = GetV(V_HOMUNTYPE, targetId)
-			if jobType ~= nil and PLAYER_JOBS[jobType] ~= nil then
-				local jobName = "未知"
-				-- 將對應職業記錄到檔案
-				jobName = PLAYER_JOBS[jobType] .. "(" .. tostring(jobType) .. ")"
-				-- 寫入檔案
-				file:write("  " .. tostring(targetId) .. ", -- " .. jobName .. "\n")
-				count = count + 1
-			end
-		end
-		file:write("}\n")
-		file:close()
-		LogAI("狙擊目標已保存: " .. SNIPER_FILE .. " (共 " .. count .. " 個目標)", "pvp")
-		return true
-	end)
-	
-	if not success then
-		LogAI("保存狙擊目標時發生錯誤: " .. tostring(err), "pvp")
-		return false
-	end
-	return true
-end
-
---- 載入狙擊目標清單
---- @return boolean 是否成功
-function LoadSniperTargets()
-	local success, err = pcall(function()
-		if not file_exist(SNIPER_FILE) then
-			-- 文件不存在，初始化空列表並自動創建文件
-			sniperTargets = {}
-			SaveSniperTargets()  -- 自動創建文件
-			LogAI("狙擊目標已初始化（新建文件）: " .. SNIPER_FILE, "pvp")
-			return true
-		end
-		dofile(SNIPER_FILE)
-		if sniperTargets == nil then
-			sniperTargets = {}
-		end
-		LogAI("狙擊目標已載入: " .. SNIPER_FILE .. " (共 " .. #sniperTargets .. " 個目標)", "pvp")
-		return true
-	end)
-	if not success then
-		LogAI("載入狙擊目標時發生錯誤: " .. tostring(err), "pvp")
-		sniperTargets = {}
-		return false
-	end
-	return true
-end
 
 --- 處理玩家攻擊指令（在狙擊模式下記錄目標）
 --- @param targetId number 攻擊目標ID
@@ -240,10 +194,61 @@ function Sniper_HandleAttackCommand(targetId, skillId, myid, oid)
 		
 		-- 記錄狙擊目標
 		if isMarkSkill then
-			if not tb_exist(sniperTargets, targetId) then
-				sniperTargets[#sniperTargets+1] = targetId
-				SaveSniperTargets()
-				LogAI("玩家對敵對目標使用技能，已記錄狙擊目標: " .. tostring(targetId) .. " (技能ID:" .. tostring(skillId) .. ")", "pvp")
+			-- 從文件讀取現有目標列表
+			local targets = GetSniperTargets()
+			
+			-- 檢查是否已存在
+			local exists = false
+			for i, target in ipairs(targets) do
+				local id = type(target) == "table" and target.id or target
+				if id == targetId then
+					exists = true
+					break
+				end
+			end
+			
+			if not exists then
+				-- 立即查詢職業
+				local jobType = GetV(V_HOMUNTYPE, targetId) or -1
+				
+				-- 追加到列表末尾
+				targets[#targets+1] = {id = targetId, job = jobType}
+				
+				-- 寫回文件
+				local success = pcall(function()
+					local file = io.open(SNIPER_FILE, "w")
+					if file then
+						file:write("-- 狙擊目標持久化文件\n")
+						file:write("-- 自動生成，請勿手動修改\n")
+						file:write("-- 格式：{id = ID, job = 職業編號}\n\n")
+						file:write("sniperTargets = {\n")
+						for i, target in ipairs(targets) do
+							local tid, tjob
+							if type(target) == "table" then
+								tid, tjob = target.id, target.job or -1
+							else
+								tid, tjob = target, -1
+							end
+							local jobName = "未知"
+							if tjob >= 0 and PLAYER_JOBS[tjob] then
+								jobName = PLAYER_JOBS[tjob] .. "(" .. tjob .. ")"
+							elseif tjob >= 0 then
+								jobName = "職業編號:" .. tjob
+							end
+							file:write("  {id = " .. tid .. ", job = " .. tjob .. "}, -- " .. jobName .. "\n")
+						end
+						file:write("}\n")
+						file:close()
+					end
+				end)
+				
+				local jobName = "未知"
+				if jobType >= 0 and PLAYER_JOBS[jobType] then
+					jobName = PLAYER_JOBS[jobType]
+				elseif jobType >= 0 then
+					jobName = "職業" .. jobType
+				end
+				LogAI("已記錄狙擊目標: ID=" .. tostring(targetId) .. " 職業=" .. jobName .. " (技能ID:" .. tostring(skillId) .. ")", "pvp")
 			end
 		end
 	end
@@ -252,14 +257,25 @@ end
 --- 清空狙擊目標清單
 --- @return nil
 function Sniper_ClearTargets()
-	sniperTargets = {}
-	SaveSniperTargets()
+	-- 直接寫入空列表到文件
+	local success = pcall(function()
+		local file = io.open(SNIPER_FILE, "w")
+		if file then
+			file:write("-- 狙擊目標持久化文件\n")
+			file:write("-- 自動生成，請勿手動修改\n")
+			file:write("-- 格式：{id = ID, job = 職業編號}\n\n")
+			file:write("sniperTargets = {\n")
+			file:write("}\n")
+			file:close()
+		end
+	end)
 	LogAI("已清空所有狙擊目標", "pvp")
 end
 
 --- 取得狙擊目標數量
 --- @return number 狙擊目標數量
 function Sniper_GetTargetCount()
-	return #sniperTargets
+	local targets = GetSniperTargets()
+	return #targets
 end
 
